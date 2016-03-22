@@ -1,5 +1,7 @@
 package com.example.android.bluetooth;
 
+import android.app.Notification;
+import android.app.NotificationManager;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothSocket;
@@ -9,10 +11,16 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.os.Bundle;
+import android.os.Handler;
 import android.support.v7.app.AppCompatActivity;
 import android.util.Log;
+import android.widget.EditText;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
@@ -22,28 +30,43 @@ public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "MainActivity";
     private BluetoothAdapter BTAdapter;
+    private int REQUEST_BLUETOOTH = 7;
     private BluetoothSocket mBluetoothSocket;
+    OutputStream mmOutputStream;
+    InputStream mmInputStream;
+    EditText myLabel;
     public static UUID applicationUUID = UUID.fromString("00030000-0000-1000-8000-00805F9B34FB");
+
+    public Handler bluetoothIn;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-
         //Set UUID in sharedPreference and ask only on installation
         SharedPreferences prefs = getSharedPreferences("MY_PREFS_NAME", MODE_PRIVATE);
         Boolean isFirst = prefs.getBoolean("isFirst", true);
         if (isFirst) {
-            Intent intent = new Intent(this,insertUUID.class);
+            Intent intent = new Intent(this, insertUUID.class);
             startActivity(intent);
-        }
-        else if (!prefs.getString("UUIDString","null").equals("null")) {
+        } else if (!prefs.getString("UUIDString", "null").equals("null")) {
             applicationUUID = UUID.fromString(prefs.getString("UUIDString", "null"));
         }
 
-        //Initialize BluetoothAdapter and start loo looking for Devices
+        //Initialize BluetoothAdapter and start looking for Devices
         BTAdapter = BluetoothAdapter.getDefaultAdapter();
+
+
+        //Set bluetooth on
+        if (!BTAdapter.isEnabled()) {
+            Intent enableBT = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
+            startActivityForResult(enableBT, REQUEST_BLUETOOTH);
+        }
+
+        myLabel = (EditText) findViewById(R.id.edit_text);
+
+        //Start discover devices
         BTAdapter.startDiscovery();
 
 
@@ -62,63 +85,87 @@ public class MainActivity extends AppCompatActivity {
                 //New device is found -
                 if (BluetoothDevice.ACTION_BOND_STATE_CHANGED.equals(action)) {
                     BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
-
+                    Log.e("onReceive", "ACTION_BOND_STATE_CHANGED");
                     //the device are paired - can now be connected
                     if (device.getBondState() == BluetoothDevice.BOND_BONDED) {
                         // CONNECT
-                        Log.wtf("here", "--------------------device.getBondState() == BluetoothDevice.BOND_BONDED------------------------");
-
+                        Log.e("onReceive", "BOND_BONDED");
                         //Initialize Rfcomm Socket to connect wih paired device
-                        BluetoothSocket bTSocket = null;
+
+                       // mmDevice = device;
                         try {
-                            //Try initiate socket
-                            bTSocket = device.createRfcommSocketToServiceRecord(applicationUUID);
+
+                            BluetoothSocket bluetoothSocket = device.createRfcommSocketToServiceRecord(applicationUUID);
+                            bluetoothSocket.connect();
                         } catch (IOException e) {
-                            Log.e("CONNECTTHREAD", "Could not create RFCOMM socket:" + e.toString());
+                            e.printStackTrace();
+                            Log.e("--onReceive", "BOND_BONDED, createRfcommSocketToServiceRecord faile" + e);
+                            createNotification("Can not connect to paired device",
+                                    "manged to pair the device but can not create socket from UUID" + e);
 
                         }
-                        //Try connect the socket
-                        try {
-                            bTSocket.connect();
-                        } catch (IOException e) {
-                            Log.e("CONNECTTHREAD", "Could not connect: " + e.toString());
-                        }
+
+
+                        Log.wtf("here", "--------------------------------------------");
+//                        BluetoothSocket bTSocket = null;
+//                        try {
+//                            //Try initiate socket
+//                            bTSocket = device.createRfcommSocketToServiceRecord(applicationUUID);
+//                        } catch (IOException e) {
+//                            Log.e("--onReceive","BOND_BONDED, createRfcommSocketToServiceRecord faile" + e);
+//                            createNotification("Can not connect to paired device",
+//                                    "manged to pair the device but can not create socket from UUID" + e);
+//                        }
+//                        //Try connect the socket
+//                        try {
+//                            bTSocket.connect();
+//                            mmOutputStream = bTSocket.getOutputStream();
+//                            mmInputStream = bTSocket.getInputStream();
+//                        } catch (IOException e) {
+//                            Log.e("--onReceive", "BOND_BONDED, createRfcommSocketToServiceRecord Could not connect: " + e.toString());
+//                            createNotification("Can not connect to paired device",
+//                                    "manged to pair the device but can not create socket from UUID" + e);
+//                        }
                     }
                 }
 
 
                 //New Device was found while scanning.(by StartDiscovery method)
-                else if (BluetoothDevice.ACTION_FOUND.equals(action))
-                {
+                else if (BluetoothDevice.ACTION_FOUND.equals(action)) {
 
                     BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
                     // Discover new device
-                    Log.wtf("here", "--------------------BluetoothDevice.ACTION_FOUND.equals(action)------------------------");
+                    Log.wtf("onReceive", "ACTION_FOUND");
 
                     //Try to automatically pair with the new device
                     Boolean isBonded = false;
                     try {
                         isBonded = createAutoPair(device);
-                        Log.wtf("here", "   " + isBonded);
+                        Log.wtf("onReceive", " isBonded: " + isBonded);
                     } catch (Exception e) {
                         e.printStackTrace();
+                        Log.wtf("--onReceive", " isBonded,Failed to create autopair " + e);
+                        createNotification("Can not auto-pair the device",
+                                "Try to pair the device and failed: " + e);
                     }
                 }
 
                 //Request for PAIRING was made by an outside device
-                else if (BluetoothDevice.ACTION_PAIRING_REQUEST.equals(action))
-                {
-                    Log.wtf("here", "--------------------ACTION_PAIRING_REQUEST------------------------");
+                else if (BluetoothDevice.ACTION_PAIRING_REQUEST.equals(action)) {
+                    Log.e("onReceive", "ACTION_PAIRING_REQUEST");
                     BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
                     //Todo:delete before releasing
                     //Automatically set pin
                     //setBluetoothPairingPin(device);
-                    try {
-                        BluetoothSocket bTSocket = device.createRfcommSocketToServiceRecord(applicationUUID);
-                        Log.wtf("here", "--------------------------------------------");
-                    } catch (IOException e) {
-                        e.printStackTrace();
-                    }
+                    Log.e("onReceive", "setBluetoothPairingPin");
+
+                    //Set Socket to create connection
+//                    try {
+//                        BluetoothSocket bTSocket = device.createRfcommSocketToServiceRecord(applicationUUID);
+//                        Log.e("onReceive", "BluetoothSocket created");
+//                    } catch (IOException e) {
+//                        e.printStackTrace();
+//                    }
 
                 }
             }
@@ -129,8 +176,6 @@ public class MainActivity extends AppCompatActivity {
         intentFilter.addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED);
         intentFilter.addAction(BluetoothDevice.ACTION_PAIRING_REQUEST);
         getApplicationContext().registerReceiver(myReceiver, intentFilter);
-
-
 
 
     }
@@ -148,7 +193,8 @@ public class MainActivity extends AppCompatActivity {
 
     }
 
-    /**Automatically set user pin to "000000" by invoking setPairingConfirmation method and set current device from
+    /**
+     * Automatically set user pin to "000000" by invoking setPairingConfirmation method and set current device from
      * onReceive ACTION_PAIRING_REQUEST filter.
      * and then cancel user UI dialog by invoking "cancelPairingUserInput"
      * With the help of:
@@ -165,15 +211,17 @@ public class MainActivity extends AppCompatActivity {
             try {
                 device.getClass().getMethod("setPairingConfirmation", boolean.class).invoke(device, true);
                 device.getClass().getMethod("cancelPairingUserInput").invoke(device);
-                Log.d(TAG, "Success to setPairingConfirmation.");
+                Log.d("onReceive", " ACTION_PAIRING_REQUEST, Success to setPairingConfirmation.");
             } catch (Exception e) {
 
-                Log.e(TAG, e.getMessage());
-                e.printStackTrace();
+                Log.e("--onReceive", " ACTION_PAIRING_REQUEST, setBluetoothPairingPin" + e.getMessage());
+                createNotification("Can not auto-pair the device",
+                        "Try to pair the device and failed: " + e);
             }
         } catch (Exception e) {
-            Log.e(TAG, e.getMessage());
-            e.printStackTrace();
+            Log.e("--onReceive", "setBluetoothPairingPin" + e.getMessage());
+            createNotification("Can not auto-set pin 000000",
+                    "Try to set pin and failed: " + e);
         }
     }
 
@@ -187,6 +235,42 @@ public class MainActivity extends AppCompatActivity {
         } catch (Exception e) {
             Log.e(TAG, e.getMessage());
         }
+    }
+
+    //Build notification for Debug mode
+    private void createNotification(String errorTitle, String errorBody) {
+
+
+        Notification n = new Notification.Builder(this)
+                .setContentTitle(errorTitle)
+                .setContentText(errorBody)
+                .setStyle(new Notification.BigTextStyle().bigText(errorBody))
+                .setAutoCancel(true).build();
+
+        NotificationManager notificationManager =
+                (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+
+        notificationManager.notify(0, n);
+    }
+
+}
+
+ class ManageConnectThread extends Thread {
+
+    public ManageConnectThread() { }
+
+    public void sendData(BluetoothSocket socket, int data) throws IOException{
+        ByteArrayOutputStream output = new ByteArrayOutputStream(5);
+        output.write(data);
+        OutputStream outputStream = socket.getOutputStream();
+        outputStream.write(output.toByteArray());
+    }
+    public int receiveData(BluetoothSocket socket) throws IOException{
+        byte[] buffer = new byte[3];
+        ByteArrayInputStream input = new ByteArrayInputStream(buffer);
+        InputStream inputStream = socket.getInputStream();
+        inputStream.read(buffer);
+        return input.read();
     }
 }
 
