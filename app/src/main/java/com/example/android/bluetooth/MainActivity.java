@@ -10,14 +10,14 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.graphics.Color;
 import android.os.Bundle;
 import android.os.Handler;
 import android.support.v7.app.AppCompatActivity;
 import android.util.Log;
-import android.widget.EditText;
+import android.view.View;
+import android.widget.TextView;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -31,11 +31,19 @@ public class MainActivity extends AppCompatActivity {
     private static final String TAG = "MainActivity";
     private BluetoothAdapter BTAdapter;
     private int REQUEST_BLUETOOTH = 7;
-    private BluetoothSocket mBluetoothSocket;
+    TextView myLabel;
+    public static UUID applicationUUID = UUID.fromString("5A2AD47A-3A69-B37B-2161-B23971F8E066");
+
+    //Read data multi-threading variables
+    BluetoothSocket mmSocket;
+    BluetoothDevice mmDevice;
     OutputStream mmOutputStream;
     InputStream mmInputStream;
-    EditText myLabel;
-    public static UUID applicationUUID = UUID.fromString("00030000-0000-1000-8000-00805F9B34FB");
+    Thread workerThread;
+    byte[] readBuffer;
+    int readBufferPosition;
+    volatile boolean stopWorker;
+    volatile boolean isUIAlreadySet;
 
     public Handler bluetoothIn;
 
@@ -64,7 +72,10 @@ public class MainActivity extends AppCompatActivity {
             startActivityForResult(enableBT, REQUEST_BLUETOOTH);
         }
 
-        myLabel = (EditText) findViewById(R.id.edit_text);
+        //Inflate textView to local variable
+        myLabel = (TextView) findViewById(R.id.textview);
+        myLabel.setText("WAITING");
+        myLabel.setTextColor(Color.BLACK);
 
         //Start discover devices
         BTAdapter.startDiscovery();
@@ -92,21 +103,24 @@ public class MainActivity extends AppCompatActivity {
                         Log.e("onReceive", "BOND_BONDED");
                         //Initialize Rfcomm Socket to connect wih paired device
 
-                       // mmDevice = device;
+                        mmDevice = device;
                         try {
-
-                            BluetoothSocket bluetoothSocket = device.createRfcommSocketToServiceRecord(applicationUUID);
-                            bluetoothSocket.connect();
+                            openBT();
                         } catch (IOException e) {
                             e.printStackTrace();
-                            Log.e("--onReceive", "BOND_BONDED, createRfcommSocketToServiceRecord faile" + e);
-                            createNotification("Can not connect to paired device",
-                                    "manged to pair the device but can not create socket from UUID" + e);
 
+                            //update UI
+                            MainActivity.this.updateUIFromReceiver();
+
+                            createNotification("Failed to connect","Failed while trying to connect to paired device");
+                            //close all connections
+                            try {
+                                closeBT();
+                            } catch (IOException e1) {
+                                e1.printStackTrace();
+                            }
+                            Log.e("openBT", "Faile" + e);
                         }
-
-
-                        Log.wtf("here", "--------------------------------------------");
 //                        BluetoothSocket bTSocket = null;
 //                        try {
 //                            //Try initiate socket
@@ -139,6 +153,7 @@ public class MainActivity extends AppCompatActivity {
 
                     //Try to automatically pair with the new device
                     Boolean isBonded = false;
+
                     try {
                         isBonded = createAutoPair(device);
                         Log.wtf("onReceive", " isBonded: " + isBonded);
@@ -154,18 +169,11 @@ public class MainActivity extends AppCompatActivity {
                 else if (BluetoothDevice.ACTION_PAIRING_REQUEST.equals(action)) {
                     Log.e("onReceive", "ACTION_PAIRING_REQUEST");
                     BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
-                    //Todo:delete before releasing
+
                     //Automatically set pin
                     //setBluetoothPairingPin(device);
-                    Log.e("onReceive", "setBluetoothPairingPin");
+                    //Log.e("onReceive", "setBluetoothPairingPin");
 
-                    //Set Socket to create connection
-//                    try {
-//                        BluetoothSocket bTSocket = device.createRfcommSocketToServiceRecord(applicationUUID);
-//                        Log.e("onReceive", "BluetoothSocket created");
-//                    } catch (IOException e) {
-//                        e.printStackTrace();
-//                    }
 
                 }
             }
@@ -178,6 +186,14 @@ public class MainActivity extends AppCompatActivity {
         getApplicationContext().registerReceiver(myReceiver, intentFilter);
 
 
+    }
+
+    private void updateUIFromReceiver() {
+
+        //Sets UI
+        myLabel = (TextView) findViewById(R.id.textview);
+        myLabel.setText("FAIL");
+        myLabel.setTextColor(Color.RED);
     }
 
     /**
@@ -227,6 +243,8 @@ public class MainActivity extends AppCompatActivity {
 
     //For UnPairing - http://stackoverflow.com/questions/14834318/android-how-to-pair-bluetooth-devices-programmatically
     private void unpairDevice(BluetoothDevice device) {
+        Log.wtf("here", "--------------------------------------------");
+
         try {
             Log.d("unpairDevice()", "Start Un-Pairing...");
             Method m = device.getClass().getMethod("removeBond", (Class[]) null);
@@ -237,6 +255,7 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+
     //Build notification for Debug mode
     private void createNotification(String errorTitle, String errorBody) {
 
@@ -244,6 +263,7 @@ public class MainActivity extends AppCompatActivity {
         Notification n = new Notification.Builder(this)
                 .setContentTitle(errorTitle)
                 .setContentText(errorBody)
+                .setSmallIcon(R.mipmap.ic_launcher)
                 .setStyle(new Notification.BigTextStyle().bigText(errorBody))
                 .setAutoCancel(true).build();
 
@@ -253,24 +273,178 @@ public class MainActivity extends AppCompatActivity {
         notificationManager.notify(0, n);
     }
 
+
+    void openBT() throws IOException {
+
+        mmSocket = mmDevice.createRfcommSocketToServiceRecord(applicationUUID);
+        mmSocket.connect();
+        mmOutputStream = mmSocket.getOutputStream();
+        mmInputStream = mmSocket.getInputStream();
+
+        sendData();
+
+    }
+
+    void sendData() throws IOException {
+        String msg = "Ping;";
+        byte[] b = msg.getBytes(StandardCharsets.UTF_8);
+        //Send msg String to output Stream
+        mmOutputStream.write(b);
+
+        //Begin listen to data for 150 milliseconds
+        beginListenForData();
+
+        Log.e("sentData: ", "bytes are :" + msg);
+        createNotification("Data was sent to the other device", "Data was sent to the other device," +
+                "The Data was :" + msg);
+
+
+    }
+
+    void beginListenForData() {
+        final Handler handler = new Handler();
+
+        stopWorker = false;
+        isUIAlreadySet = false;
+        readBufferPosition = 0;
+        readBuffer = new byte[1024];
+        workerThread = new Thread(new Runnable() {
+            public void run() {
+                long t = System.currentTimeMillis();
+                long end = t + 150;
+                long timeCounter = 0;
+
+                //Check for no interruptions while working and for 150ml only
+                while (!Thread.currentThread().isInterrupted() && !stopWorker && (System.currentTimeMillis() < end)) {
+                    try {
+                        //Check for current Input stream length available
+                        int bytesAvailable = mmInputStream.available();
+
+                        //If there is some inputStream
+                        if (bytesAvailable > 0) {
+                            //Set up new byte array to collect current stream
+                            byte[] packetBytes = new byte[bytesAvailable];
+
+                            //read from inputStream and insert to the new byte array
+                            mmInputStream.read(packetBytes);
+
+                            //For to build buffer
+                            for (int i = 0; i < bytesAvailable; i++) {
+                                //set one byte to be send to the buffer - if buffer is bigger then 3 Validate the answer
+                                byte b = packetBytes[i];
+                                if (readBufferPosition >= 3) {
+                                    //build new byte array with the length of the buffer array
+                                    byte[] encodedBytes = new byte[readBufferPosition];
+
+                                    //http://stackoverflow.com/questions/12239692/android-inputstream-dropping-first-two-bytes-modified-bluetoothchat/12264498#12264498
+                                    //copy buffer to length to prevent bug from above link
+                                    System.arraycopy(readBuffer, 0, encodedBytes, 0, encodedBytes.length);
+
+                                    //Encode data from byte to final string using String.class method
+                                    final String data = new String(encodedBytes, "US-ASCII");
+                                    readBufferPosition = 0;
+
+                                    handler.post(new Runnable() {
+                                        public void run() {
+                                            if (data == "OK") {
+                                                myLabel.setText("PASS");
+                                                myLabel.setTextColor(Color.GREEN);
+                                                isUIAlreadySet = true;
+
+                                                //Close all connections
+                                                try {
+                                                    closeBT();
+                                                } catch (IOException e) {
+                                                    e.printStackTrace();
+                                                }
+                                            } else {
+                                                myLabel.setText("FAIL");
+                                                myLabel.setTextColor(Color.RED);
+                                                isUIAlreadySet = true;
+
+                                                //Close all connections
+                                                try {
+                                                    closeBT();
+                                                } catch (IOException e) {
+                                                    e.printStackTrace();
+                                                }
+                                            }
+                                        }
+                                    });
+                                } else {
+                                    readBuffer[readBufferPosition++] = b;
+                                }
+                            }
+                        }
+                        try {
+                            Thread.sleep(1);
+                        } catch (InterruptedException e) {
+                            Log.e(" Thread.sleep(1);", " Problem with current device system");
+                            createNotification("Problem in cell phone", "Current device had " +
+                                    "system problem in Android OS while trying to calculate time (milliseconds)");
+                        }
+                    } catch (IOException ex) {
+                        stopWorker = true;
+                    }
+                }
+                //UI not been set it - the BY device did not work
+                if (!isUIAlreadySet) {
+
+                    //set UI for fail
+                    handler.post(new Runnable() {
+
+                        public void run() {
+                            myLabel.setText("FAIL");
+                            myLabel.setTextColor(Color.RED);
+                            isUIAlreadySet = true;
+                            try {
+                                //Close BT connections
+                                closeBT();
+                            } catch (IOException e) {
+                                e.printStackTrace();
+                            }
+                        }
+                    });
+                }
+
+            }
+
+        });
+
+        workerThread.start();
+    }
+
+    void closeBT() throws IOException {
+        stopWorker = true;
+
+        unpairDevice(mmDevice);
+
+
+        //Schedule Task for 5 seconds on,cunt time on background thread
+        new java.util.Timer().schedule(
+                new java.util.TimerTask() {
+                    @Override
+                    public void run() {
+                        //Restart the app
+                        Intent intent2 = getIntent();
+                        finish();
+                        startActivity(intent2);
+                    }
+                }, 10000);
+
+    }
+
+    public void refreshAppOnClick(View view) {
+
+        //Restart the app
+        Intent intent = getIntent();
+        finish();
+        startActivity(intent);
+
+    }
 }
 
- class ManageConnectThread extends Thread {
 
-    public ManageConnectThread() { }
 
-    public void sendData(BluetoothSocket socket, int data) throws IOException{
-        ByteArrayOutputStream output = new ByteArrayOutputStream(5);
-        output.write(data);
-        OutputStream outputStream = socket.getOutputStream();
-        outputStream.write(output.toByteArray());
-    }
-    public int receiveData(BluetoothSocket socket) throws IOException{
-        byte[] buffer = new byte[3];
-        ByteArrayInputStream input = new ByteArrayInputStream(buffer);
-        InputStream inputStream = socket.getInputStream();
-        inputStream.read(buffer);
-        return input.read();
-    }
-}
+
 

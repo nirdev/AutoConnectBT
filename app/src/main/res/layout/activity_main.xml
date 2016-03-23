@@ -7,12 +7,21 @@
     tools:context=".MainActivity"
     android:transitionGroup="true">
 
-    <TextView android:text="Waiting" android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
+    <TextView
         android:id="@+id/textview"
-        android:textSize="35dp"
+        android:text="Waiting"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textSize="55dp"
         android:layout_alignParentTop="true"
         android:layout_centerHorizontal="true" />
+    <Button
+        android:id="@+id/refresh"
+        android:layout_below="@id/textview"
+        android:text="Refresh App"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:onClick="refreshAppOnClick"/>
 
 
 </RelativeLayout>

@@ -13,7 +13,7 @@
         android:id="@+id/edit_text"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="00030000-0000-1000-8000-00805F9B34FB"/>
+        android:text="5A2AD47A-3A69-B37B-2161-B23971F8E066"/>
     <Button
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
