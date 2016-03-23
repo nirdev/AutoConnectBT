@@ -171,8 +171,8 @@ public class MainActivity extends AppCompatActivity {
                     BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
 
                     //Automatically set pin
-                    //setBluetoothPairingPin(device);
-                    //Log.e("onReceive", "setBluetoothPairingPin");
+                    setBluetoothPairingPin(device);
+                    Log.e("onReceive", "setBluetoothPairingPin");
 
 
                 }
